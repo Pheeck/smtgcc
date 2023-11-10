@@ -387,7 +387,7 @@ AdvancedUnroller::AdvancedUnroller(Basic_block *l)
   func = l->func;
 }
 
-// Same code as Unroller::ensure_lcssa
+// Almost same code as Unroller::ensure_lcssa (loop_header -> loop_latch)
 void AdvancedUnroller::ensure_lcssa(Instruction *inst)
 {
   std::vector<Instruction *> invalid_use;
