@@ -1,6 +1,6 @@
 // Unroll loops.
 //
-// Only very simple loops (consisting of 1 or 2 basic blocks) are handled.
+// Only very simple loops (consisting of 1, 2 or 3 basic blocks) are handled.
 
 #include <algorithm>
 #include <cassert>
@@ -387,7 +387,7 @@ AdvancedUnroller::AdvancedUnroller(Basic_block *h)
   func = h->func;
 }
 
-// The same as in Unroller
+// Same code as Unroller::ensure_lcssa
 void AdvancedUnroller::ensure_lcssa(Instruction *inst)
 {
   std::vector<Instruction *> invalid_use;
@@ -413,7 +413,7 @@ void AdvancedUnroller::ensure_lcssa(Instruction *inst)
     }
 }
 
-// The same as in Unroller
+// Same code as Unroller::create_lcssa
 void AdvancedUnroller::create_lcssa()
 {
   for (auto bb : loop_bbs)
@@ -481,7 +481,7 @@ Instruction *AdvancedUnroller::translate(Instruction *inst)
   return inst;
 }
 
-// The same as in unroller
+// Same code as Unroller::duplicate
 void AdvancedUnroller::duplicate(Instruction *inst, Basic_block *bb)
 {
   Instruction *new_inst = nullptr;
@@ -526,8 +526,6 @@ void AdvancedUnroller::unroll()
   // Add a new loop exit block that only have phi nodes. This is
   // not necessary, but it makes it easier to verify that we
   // create correct LCSSA.
-  //
-  // Almost same as in Unroller
   {
     loop_exit = func->build_bb();
     loop_exit->build_br_inst(orig_loop_exit);
@@ -627,7 +625,7 @@ void AdvancedUnroller::unroll()
 	  new_phi->add_phi_arg(arg_if, body_if_bbs.at(i));
 	  new_phi->add_phi_arg(arg_then, body_then_bbs.at(i));
 	  curr_inst[phi] = new_phi;
-	} // TODO Rozmyslet, jestli to nemusím rozdělit do dvou kroků
+	}
       for (Instruction *inst = loop_header->first_inst;
 	   inst;
 	   inst = inst->next)
@@ -654,8 +652,6 @@ void AdvancedUnroller::unroll()
 
   // The last block is for cases the program loops more than our unroll limit.
   // This makes our analysis invalid, so we mark this as UB.
-  //
-  // Almost same as in Unroller
   Basic_block *last_bb = body_if_bbs.at(unroll_limit - 1);
   last_bb->build_inst(Op::UB, last_bb->value_inst(1, 1));
   last_bb->build_br_inst(loop_exit);
@@ -665,8 +661,6 @@ void AdvancedUnroller::unroll()
     }
 
   // Update the original loop to only do the first iteration.
-  //
-  // A bit different from Unroller
   for (auto phi : loop_body_if->phis)
     {
       phi->remove_phi_arg(loop_header);
@@ -690,7 +684,6 @@ void AdvancedUnroller::unroll()
 
 bool loop_unroll(Function *func)
 {
-  func->module->print(stderr); // DEBUG
   Basic_block *bb;
   bool unrolled = false;
   while ((bb = find_simple_loop(func)))
@@ -712,7 +705,6 @@ bool loop_unroll(Function *func)
   if (has_loops(func))
     throw Not_implemented("loops");
 
-  func->module->print(stderr); // DEBUG
   return unrolled;
 }
 
