@@ -343,7 +343,7 @@ void Unroller::unroll()
 class AdvancedUnroller
 {
   Function *func;
-  Basic_block *loop_header;
+  Basic_block *loop_cond_bb;
   Basic_block *loop_exit;
   Basic_block *loop_body_if;
   Basic_block *loop_body_then;
@@ -372,7 +372,7 @@ AdvancedUnroller::AdvancedUnroller(Basic_block *h)
       assert(bb2->preds.size() == 1 && bb2->preds[0] == bb1);
     }
 
-  loop_header = h;
+  loop_cond_bb = h;
   if (h->succs[0] == bb1)
     orig_loop_exit = h->succs[1];
   else
@@ -382,7 +382,7 @@ AdvancedUnroller::AdvancedUnroller(Basic_block *h)
 
   loop_bbs.push_back(loop_body_if);
   loop_bbs.push_back(loop_body_then);
-  loop_bbs.push_back(loop_header);
+  loop_bbs.push_back(loop_cond_bb);
 
   func = h->func;
 }
@@ -403,7 +403,7 @@ void AdvancedUnroller::ensure_lcssa(Instruction *inst)
   if (!invalid_use.empty())
     {
       Instruction *phi = loop_exit->build_phi_inst(inst->bitsize);
-      phi->add_phi_arg(inst, loop_header);
+      phi->add_phi_arg(inst, loop_cond_bb);
       while (!invalid_use.empty())
 	{
 	  Instruction *use = invalid_use.back();
@@ -534,30 +534,30 @@ void AdvancedUnroller::unroll()
     for (auto orig_phi : orig_loop_exit->phis)
       {
 	Instruction *phi = loop_exit->build_phi_inst(orig_phi->bitsize);
-	Instruction *arg = orig_phi->get_phi_arg(loop_header);
-	phi->add_phi_arg(arg, loop_header);
-	orig_phi->remove_phi_arg(loop_header);
+	Instruction *arg = orig_phi->get_phi_arg(loop_cond_bb);
+	phi->add_phi_arg(arg, loop_cond_bb);
+	orig_phi->remove_phi_arg(loop_cond_bb);
 	orig_phi->add_phi_arg(phi, loop_exit);
       }
-    assert(loop_header->last_inst->opcode == Op::BR);
-    assert(loop_header->last_inst->nof_args == 1);
-    Instruction *cond = loop_header->last_inst->arguments[0];
-    Basic_block *true_bb = loop_header->last_inst->u.br3.true_bb;
+    assert(loop_cond_bb->last_inst->opcode == Op::BR);
+    assert(loop_cond_bb->last_inst->nof_args == 1);
+    Instruction *cond = loop_cond_bb->last_inst->arguments[0];
+    Basic_block *true_bb = loop_cond_bb->last_inst->u.br3.true_bb;
     if (true_bb == orig_loop_exit)
       true_bb = loop_exit;
     else
-      assert(true_bb == loop_header
+      assert(true_bb == loop_cond_bb
 	     || true_bb == loop_body_if
 	     || true_bb == loop_body_then);
-    Basic_block *false_bb = loop_header->last_inst->u.br3.false_bb;
+    Basic_block *false_bb = loop_cond_bb->last_inst->u.br3.false_bb;
     if (false_bb == orig_loop_exit)
       false_bb = loop_exit;
     else
-      assert(false_bb == loop_header
+      assert(false_bb == loop_cond_bb
 	     || false_bb == loop_body_if
 	     || false_bb == loop_body_then);
-    destroy_instruction(loop_header->last_inst);
-    loop_header->build_br_inst(cond, true_bb, false_bb);
+    destroy_instruction(loop_cond_bb->last_inst);
+    loop_cond_bb->build_br_inst(cond, true_bb, false_bb);
   }
 
   create_lcssa();
@@ -580,7 +580,7 @@ void AdvancedUnroller::unroll()
       std::map<Instruction *, Instruction *> tmp_curr_inst;
       for (auto phi : loop_body_if->phis)
 	{
-	  tmp_curr_inst[phi] = translate(phi->get_phi_arg(loop_header));
+	  tmp_curr_inst[phi] = translate(phi->get_phi_arg(loop_cond_bb));
 	}
       for (auto [phi, translated_phi] : tmp_curr_inst)
 	{
@@ -596,7 +596,7 @@ void AdvancedUnroller::unroll()
 	      Instruction *arg = translate(inst->arguments[0]);
 	      Basic_block *true_bb = body_then_bbs.at(i);
 	      Basic_block *false_bb = header_bbs.at(i);
-	      if (inst->u.br3.true_bb == loop_header)
+	      if (inst->u.br3.true_bb == loop_cond_bb)
 		std::swap(true_bb, false_bb);
 	      body_if_bbs.at(i)->build_br_inst(arg, true_bb, false_bb);
 	    }
@@ -619,16 +619,16 @@ void AdvancedUnroller::unroll()
 	}
 
       // Duplicate HEADER block
-      for (auto phi : loop_header->phis)
+      for (auto phi : loop_cond_bb->phis)
 	{
 	  Instruction *arg_if = translate(phi->get_phi_arg(loop_body_if));
 	  Instruction *arg_then = translate(phi->get_phi_arg(loop_body_then));
 	  Instruction *new_phi = header_bbs.at(i)->build_phi_inst(phi->bitsize);
-	  new_phi->add_phi_arg(arg_if, loop_body_if);
-	  new_phi->add_phi_arg(arg_then, loop_body_then);
+	  new_phi->add_phi_arg(arg_if, body_if_bbs.at(i));
+	  new_phi->add_phi_arg(arg_then, body_then_bbs.at(i));
 	  curr_inst[phi] = new_phi;
 	} // TODO Rozmyslet, jestli to nemusím rozdělit do dvou kroků
-      for (Instruction *inst = loop_header->first_inst;
+      for (Instruction *inst = loop_cond_bb->first_inst;
 	   inst;
 	   inst = inst->next)
 	{
@@ -643,7 +643,7 @@ void AdvancedUnroller::unroll()
 	      header_bbs.at(i)->build_br_inst(arg, true_bb, false_bb);
 	      for (auto phi : loop_exit->phis)
 		{
-		  Instruction *phi_arg = phi->get_phi_arg(loop_header);
+		  Instruction *phi_arg = phi->get_phi_arg(loop_cond_bb);
 		  phi->add_phi_arg(translate(phi_arg), header_bbs.at(i));
 		}
 	    }
@@ -669,11 +669,11 @@ void AdvancedUnroller::unroll()
   // A bit different from Unroller
   for (auto phi : loop_body_if->phis)
     {
-      phi->remove_phi_arg(loop_header);
+      phi->remove_phi_arg(loop_cond_bb);
     }
-  Instruction *cond = loop_header->last_inst->arguments[0];
-  Basic_block *true_bb = loop_header->last_inst->u.br3.true_bb;
-  Basic_block *false_bb = loop_header->last_inst->u.br3.false_bb;
+  Instruction *cond = loop_cond_bb->last_inst->arguments[0];
+  Basic_block *true_bb = loop_cond_bb->last_inst->u.br3.true_bb;
+  Basic_block *false_bb = loop_cond_bb->last_inst->u.br3.false_bb;
   if (true_bb == loop_body_if)
     true_bb = body_if_bbs.at(0);
   else
@@ -682,8 +682,8 @@ void AdvancedUnroller::unroll()
     false_bb = body_if_bbs.at(0);
   else
     assert(false_bb == loop_exit);
-  destroy_instruction(loop_header->last_inst);
-  loop_header->build_br_inst(cond, true_bb, false_bb);
+  destroy_instruction(loop_cond_bb->last_inst);
+  loop_cond_bb->build_br_inst(cond, true_bb, false_bb);
 }
 
 } // end anonymous namespace
