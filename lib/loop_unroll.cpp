@@ -20,13 +20,11 @@ const int unroll_limit = 12;
 
 class Unroller
 {
+protected:
   Function *func;
-  Basic_block *loop_header;
+  Basic_block *loop_latch;
   Basic_block *loop_exit;
-  Basic_block *loop_body;
-  Basic_block *orig_loop_exit;
   std::map<Instruction *, Instruction *> curr_inst;
-
   std::vector<Basic_block *> loop_bbs;
 
   void duplicate(Instruction *inst, Basic_block *bb);
@@ -35,31 +33,8 @@ class Unroller
   void create_lcssa();
 
 public:
-  Unroller(Basic_block *bb);
-  void unroll();
+  virtual void unroll();
 };
-
-Unroller::Unroller(Basic_block *bb)
-{
-  if (bb->succs.size() == 1)
-    {
-      assert(bb->succs.size() == 1 && bb->preds.size() == 1);
-      assert(bb->succs[0] == bb->preds[0]);
-      loop_body = bb;
-      bb = loop_body->succs[0];
-      orig_loop_exit = loop_body == bb->succs[0] ? bb->succs[1] : bb->succs[0];
-      loop_bbs.push_back(loop_body);
-    }
-  else
-    {
-      loop_body = nullptr;
-      orig_loop_exit = bb == bb->succs[0] ? bb->succs[1] : bb->succs[0];
-    }
-  assert(bb->succs.size() == 2);
-  func = bb->func;
-  loop_header = bb;
-  loop_bbs.push_back(loop_header);
-}
 
 // Check that the instruction is used in LCSSA-safe way (i.e., all uses are
 // either in the loop, or in a phi-node at a loop exit). If not, insert a new
@@ -105,6 +80,39 @@ void Unroller::create_lcssa()
     }
 }
 
+
+class SimpleUnroller : public Unroller
+{
+  Basic_block *loop_body;
+  Basic_block *orig_loop_exit;
+
+public:
+  Unroller(Basic_block *bb);
+  void unroll();
+};
+
+SimpleUnroller::SimpleUnroller(Basic_block *bb)
+{
+  if (bb->succs.size() == 1)
+    {
+      assert(bb->succs.size() == 1 && bb->preds.size() == 1);
+      assert(bb->succs[0] == bb->preds[0]);
+      loop_body = bb;
+      bb = loop_body->succs[0];
+      orig_loop_exit = loop_body == bb->succs[0] ? bb->succs[1] : bb->succs[0];
+      loop_bbs.push_back(loop_body);
+    }
+  else
+    {
+      loop_body = nullptr;
+      orig_loop_exit = bb == bb->succs[0] ? bb->succs[1] : bb->succs[0];
+    }
+  assert(bb->succs.size() == 2);
+  func = bb->func;
+  loop_header = bb;
+  loop_bbs.push_back(loop_header);
+}
+
 // Find a loop we can unroll. There are two cases:
 // 1. The loop consist of one basic block.
 //    If one such loop is found, then that BB is returned.
@@ -135,7 +143,7 @@ Basic_block *find_simple_loop(Function *func)
 
 // Get the SSA variable (i.e., instruction) corresponding to the input SSA
 // variable for the use in this iteration.
-Instruction *Unroller::translate(Instruction *inst)
+Instruction *SimpleUnroller::translate(Instruction *inst)
 {
   auto I = curr_inst.find(inst);
   if (I != curr_inst.end())
@@ -143,7 +151,7 @@ Instruction *Unroller::translate(Instruction *inst)
   return inst;
 }
 
-void Unroller::duplicate(Instruction *inst, Basic_block *bb)
+void SimpleUnroller::duplicate(Instruction *inst, Basic_block *bb)
 {
   Instruction *new_inst = nullptr;
   Inst_class iclass = inst->iclass();
@@ -182,7 +190,7 @@ void Unroller::duplicate(Instruction *inst, Basic_block *bb)
   curr_inst[inst] = new_inst;
 }
 
-void Unroller::unroll()
+void SimpleUnroller::unroll()
 {
   // Add a new loop exit block that only have phi nodes. This is
   // not necessary, but it makes it easier to verify that we
@@ -340,17 +348,11 @@ void Unroller::unroll()
     }
 }
 
-class AdvancedUnroller
+class AdvancedUnroller : public Unroller
 {
-  Function *func;
-  Basic_block *loop_latch;
-  Basic_block *loop_exit;
   Basic_block *loop_header;
   Basic_block *loop_mid;
   Basic_block *orig_loop_exit;
-  std::map<Instruction *, Instruction *> curr_inst;
-
-  std::vector<Basic_block *> loop_bbs;
 
   void duplicate(Instruction *inst, Basic_block *bb);
   Instruction *translate(Instruction *inst);
@@ -689,7 +691,7 @@ bool loop_unroll(Function *func)
   bool unrolled = false;
   while ((bb = find_simple_loop(func)))
     {
-      Unroller unroller(bb);
+      SimpleUnroller unroller(bb);
       unroller.unroll();
       reverse_post_order(func);
       unrolled = true;
